@@ -137,7 +137,7 @@
         <div class="vignette"></div>
       </div>
     </div>
-    <p class="hint">← ↓ ↑ → — играть в такт &nbsp; · &nbsp; <b>Enter</b> — старт / рестарт</p>
+    <p class="hint" id="controlHint">← ↓ ↑ → — играть в такт &nbsp; · &nbsp; <b>Enter</b> — старт / рестарт</p>
   </div>
 
 <script>
@@ -172,7 +172,7 @@
   };
 
   // ---------- не даём стрелкам/пробелу/Enter скроллить страницу ----------
-  var BLOCKED = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Enter'];
+  var BLOCKED = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Enter','KeyW','KeyA','KeyS','KeyD'];
   window.addEventListener('keydown', function(e){
     if (BLOCKED.indexOf(e.code) !== -1) e.preventDefault();
     // на экране регистрации имени печатаем обычным вводом — гасим и остальные
@@ -220,6 +220,16 @@
     { key:'ArrowDown',  glyph:'↓', pitch:783.99 }, // соль
     { key:'ArrowRight', glyph:'→', pitch:1046.5 }  // до (окт. выше)
   ];
+  // ---------- схема управления: стрелки или WASD ----------
+  // порядок кодов клавиш в каждой схеме совпадает с порядком LANES/ARROW_DIR
+  // (влево, вверх, вниз, вправо), поэтому индекс в CONTROL_SCHEMES[scheme]
+  // всегда указывает на ту же дорожку, что и LANES[индекс]
+  var CONTROL_SCHEMES = {
+    arrows: ['ArrowLeft', 'ArrowUp', 'ArrowDown', 'ArrowRight'],
+    wasd:   ['KeyA', 'KeyW', 'KeyS', 'KeyD']
+  };
+  var WASD_LETTERS = ['A', 'W', 'S', 'D'];
+  var controlScheme = 'arrows'; // перезаписывается сохранением ниже, после loadSave()
   var LANE_X = [141, 197, 253, 309]; // центры дорожек, холст 450 шириной
   var HIT_Y = 258;
   var SPAWN_Y = 18;
@@ -283,7 +293,7 @@
   var LEVELS = [
     { name: 'сон в обед', bpm: 100,
       endings: { good: 'ПОЛНА СИЛ', bad: 'ПОРА НА РАБОТУ' },
-      hint: 'нажимай стрелку в момент, когда нота долетит до кольца',
+      hint: 'нажимай нужную клавишу в момент, когда нота долетит до кольца',
       cutscene: { good: 'charged', bad: 'alarm' },
       pattern: [
       0,2,1,3, 0,1,2,3, 2,0,3,1, 0,2,1,3,
@@ -291,7 +301,7 @@
 
     { name: 'полёт во сне', bpm: 108,
       endings: { good: 'ТЫ ВЗЛЕТЕЛА', bad: 'ПОТОК ОБОРВАН' },
-      hint: 'иногда нужно нажать сразу две стрелки — лови поток',
+      hint: 'иногда нужно нажать сразу две клавиши — лови поток',
       cutscene: { good: 'float', bad: 'fade' },
       pattern: [
       0,2,1,3, {lanes:[0,3]}, 1,2,
@@ -512,7 +522,7 @@
     обёрнуты — игра просто останется без рекордов, но не сломается.
   */
   var SAVE_KEY = 'dryoma-save-v1';
-  var save = { name: '', total: 0, best: 0, levelBest: [], levelCleared: [], lastScore: [] };
+  var save = { name: '', total: 0, best: 0, levelBest: [], levelCleared: [], lastScore: [], controlScheme: 'arrows' };
   function loadSave(){
     try {
       var raw = window.localStorage.getItem(SAVE_KEY);
@@ -524,6 +534,7 @@
       save.levelBest = Array.isArray(got.levelBest) ? got.levelBest : [];
       save.levelCleared = Array.isArray(got.levelCleared) ? got.levelCleared : [];
       save.lastScore = Array.isArray(got.lastScore) ? got.lastScore : [];
+      save.controlScheme = got.controlScheme === 'wasd' ? 'wasd' : 'arrows';
     } catch (e) {}
   }
   function persist(){
@@ -545,9 +556,24 @@
     return n;
   }
   loadSave();
+  controlScheme = save.controlScheme;
+  // подсказка под экраном (HTML, не канвас) — единственное место, где схема
+  // управления показана текстом, а не пиксельной иконкой в кольце
+  var controlHintEl = document.getElementById('controlHint');
+  function updateHintText(){
+    var keys = controlScheme === 'wasd' ? 'A S W D' : '← ↓ ↑ →';
+    controlHintEl.innerHTML = keys + ' — играть в такт &nbsp; · &nbsp; <b>Enter</b> — старт / рестарт';
+  }
+  updateHintText();
+  function toggleControlScheme(){
+    controlScheme = controlScheme === 'arrows' ? 'wasd' : 'arrows';
+    save.controlScheme = controlScheme;
+    persist();
+    updateHintText();
+  }
 
   // ---------- состояние игры ----------
-  var STATE = { NAME:'name', MENU:'menu', HINT:'hint', PLAY:'play', PAUSE:'pause', CUT:'cut', OVER:'over', CLEAR:'clear', FINALE:'finale' };
+  var STATE = { NAME:'name', MENU:'menu', SETTINGS:'settings', HINT:'hint', PLAY:'play', PAUSE:'pause', CUT:'cut', OVER:'over', CLEAR:'clear', FINALE:'finale' };
   var CUT_LEN = 3.6;              // длительность мини-катсцены, сек
   var cutStart = 0, cutGood = false;
   var pauseChoice = 0;    // 0/1 — выбор между "продолжить" и "в меню" на паузе
@@ -695,6 +721,18 @@
       return;
     }
 
+    // настройки открываются/закрываются клавишей S, но только из меню —
+    // внутри уровня (подсказка/игра/пауза/итоги) S остаётся обычной игровой
+    // клавишей (в схеме WASD это "вниз") и настройки не трогает
+    if (code === 'KeyS' && (state === STATE.MENU || state === STATE.SETTINGS)){
+      state = state === STATE.MENU ? STATE.SETTINGS : STATE.MENU;
+      return;
+    }
+    if (state === STATE.SETTINGS){
+      if (code === 'ArrowLeft' || code === 'ArrowRight') toggleControlScheme();
+      return;
+    }
+
     // пауза включается/выключается клавишей Escape только во время самой
     // игры — на экранах меню, итогов и катсцены ей делать нечего
     if (code === 'Escape'){
@@ -756,7 +794,7 @@
       return;
     }
     if (state !== STATE.PLAY) return;
-    var laneIdx = LANES.findIndex(function(l){ return l.key === code; });
+    var laneIdx = CONTROL_SCHEMES[controlScheme].indexOf(code);
     if (laneIdx === -1) return;
 
     var t = now();
@@ -1073,6 +1111,37 @@
     if (dir === 'up')    pts = [[-4,3],[-4,2],[-3,1],[-2,0],[-1,-1],[0,-2],[1,-1],[2,0],[3,1],[4,2],[4,3]];
     if (dir === 'down')  pts = [[-4,-3],[-4,-2],[-3,-1],[-2,0],[-1,1],[0,2],[1,1],[2,0],[3,-1],[4,-2],[4,-3]];
     pts.forEach(function(p){ px(cx+p[0], cy+p[1], 1, 1, color); });
+  }
+  // буква WASD в кольце мишени — тот же пиксельный шрифт, что и весь текст
+  // игры, отцентрованная и по горизонтали, и по вертикали относительно cx/cy
+  function drawLetterIcon(letter, cx, cy, color){
+    var img = pixelTextCanvas(letter, FONT_NATIVE, color);
+    ctx.drawImage(img, Math.round(cx - img.width/2), Math.round(cy - img.height/2));
+  }
+
+  /*
+    Шестерёнка — просто картинка на экране настроек (клавиша S в меню),
+    без мыши и без хит-теста. Рисуется тем же способом, что кольца мишеней —
+    по расстоянию до центра, без ctx.arc, чтобы остаться в едином пиксельном
+    стиле игры. Зубцы — те же пиксели, что и обод, но только в узких
+    секторах через равные промежутки угла.
+  */
+  function drawGear(cx, cy, r, color){
+    var rInner = r - 3, toothLen = 3, toothCount = 8, toothDeg = 22;
+    var sector = 360 / toothCount;
+    var outer = r + toothLen;
+    for (var yy = -outer; yy <= outer; yy++){
+      for (var xx = -outer; xx <= outer; xx++){
+        var d = Math.sqrt(xx*xx + yy*yy);
+        if (d >= rInner && d <= r){
+          px(cx+xx, cy+yy, 1, 1, color);
+        } else if (d > r && d <= outer){
+          var deg = (Math.atan2(yy, xx) * 180 / Math.PI + 360) % 360;
+          if ((deg % sector) < toothDeg) px(cx+xx, cy+yy, 1, 1, color);
+        }
+      }
+    }
+    drawDisc(cx, cy, 2, color);
   }
 
   /*
@@ -1628,7 +1697,10 @@
     LANE_X.forEach(function(x, i){
       var flashed = flashes.some(function(f){ return f.lane === i; });
       drawRing(x, HIT_Y, 12, 10, flashed ? COL.cream : COL.lav);
-      drawArrowIcon(ARROW_DIR[i], x, HIT_Y, COL.cream);
+      // в круге мишени показываем ту клавишу, которая реально работает
+      // сейчас: стрелку или букву WASD — в зависимости от выбранной схемы
+      if (controlScheme === 'wasd') drawLetterIcon(WASD_LETTERS[i], x, HIT_Y, COL.cream);
+      else drawArrowIcon(ARROW_DIR[i], x, HIT_Y, COL.cream);
     });
 
     flashes.forEach(function(f){
@@ -1853,6 +1925,16 @@
       } else if (Math.floor(t*2) % 2 === 0){
         centerText(['ENTER — начать'], gridBottom + 60, TEXT, COL.cream);
       }
+      centerText(['S — настройки'], gridBottom + 82, FONT_NATIVE, COL.lav);
+    }
+
+    if (state === STATE.SETTINGS){
+      drawGear(W/2, 56, 10, COL.lav);
+      centerText(['НАСТРОЙКИ'], 84, TITLE, COL.cream);
+      centerText(['управление'], 132, FONT_NATIVE, COL.lav);
+      var schemeLabel = controlScheme === 'wasd' ? 'WASD' : 'СТРЕЛКИ';
+      centerText(['← ' + schemeLabel + ' →'], 156, TEXT, COL.cream);
+      centerText(['S — закрыть'], 210, TEXT, COL.lav);
     }
 
     if (state === STATE.OVER || state === STATE.CLEAR){
