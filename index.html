@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>Дрёма — ритм-игра</title>
 <style>
   /*
@@ -52,16 +52,29 @@
     font-family:"Courier New",Consolas,monospace;
     color:var(--cream);
     overflow:hidden;
+    /* убирает системные жесты (оттягивание страницы, двойной тап-зум) над
+       игровым полем — без этого палец на телефоне то скроллит страницу,
+       то масштабирует её вместо игры */
+    touch-action:none;
+    overscroll-behavior:none;
   }
   .tv{
     display:flex;
     flex-direction:column;
     align-items:center;
     gap:14px;
+    width:100%;
+    padding:8px;
   }
   .bezel{
-    padding:26px;
-    border-radius:34px;
+    /* на телефоне безел и отступы вокруг экрана сжимаются вместе с ним —
+       clamp() держит их пропорциональными, а не фиксированными в пикселях.
+       Итоговая ширина ограничена одновременно по ширине (96vw) и по высоте
+       экрана (через грубый пересчёт 3:2 соотношения сторон из vh), поэтому
+       игра целиком помещается и в высокий портрет, и в невысокий альбом. */
+    width:min(96vw, 950px, calc((92vh - 60px) * 1.55));
+    padding:clamp(8px, 3vw, 26px);
+    border-radius:clamp(12px, 4vw, 34px);
     background:
       radial-gradient(120% 140% at 30% 20%, #2a3050 0%, var(--bezel-1) 45%, var(--bezel-2) 100%);
     box-shadow:
@@ -71,8 +84,8 @@
   }
   .screen{
     position:relative;
-    width:900px;
-    height:600px;
+    width:100%;
+    aspect-ratio:3/2;
     border-radius:18px;
     overflow:hidden;
     background:#000;
@@ -86,6 +99,9 @@
     width:100%;
     height:100%;
     display:block;
+    touch-action:none;
+    -webkit-user-select:none;
+    user-select:none;
     /* полный набор вендорных значений — без этого часть браузеров (особенно
        Firefox и старые Chromium) молча игнорирует правило и сглаживает
        увеличенный канвас, из-за чего пиксели выглядят размытыми */
@@ -96,6 +112,21 @@
     image-rendering:crisp-edges;
     image-rendering:pixelated;
     -ms-interpolation-mode:nearest-neighbor;
+  }
+  /* невидимое поле для регистрации имени: у канваса нет фокуса, поэтому
+     без настоящего <input> мобильный браузер просто не покажет клавиатуру.
+     Поле держим в потоке (не display:none — такие элементы не фокусируются),
+     но нулевого размера и прозрачным, чтобы визуально всё так же рисовал канвас */
+  #nameInput{
+    position:absolute;
+    width:1px;
+    height:1px;
+    padding:0;
+    border:none;
+    opacity:0;
+    background:transparent;
+    color:transparent;
+    caret-color:transparent;
   }
   /* CRT scanlines */
   .scanlines{
@@ -119,11 +150,12 @@
   }
   .hint{
     margin:0;
-    font-size:13px;
+    font-size:clamp(10px, 2.6vw, 13px);
     letter-spacing:.08em;
     color:var(--lav);
     text-align:center;
     opacity:.85;
+    padding:0 8px;
   }
   .hint b{color:var(--cream)}
 </style>
@@ -139,6 +171,8 @@
     </div>
     <p class="hint" id="controlHint">← ↓ ↑ → — играть в такт &nbsp; · &nbsp; <b>Enter</b> — старт / рестарт</p>
   </div>
+  <input id="nameInput" type="text" maxlength="10" autocomplete="off" autocapitalize="off"
+         autocorrect="off" spellcheck="false" enterkeyhint="done" aria-hidden="true" tabindex="-1" />
 
 <script>
 (function(){
@@ -174,12 +208,36 @@
   // ---------- не даём стрелкам/пробелу/Enter скроллить страницу ----------
   var BLOCKED = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Enter','KeyW','KeyA','KeyS','KeyD'];
   window.addEventListener('keydown', function(e){
+    // экран регистрации имени печатает настоящий (пусть и невидимый) <input>
+    // #nameInput — так на телефоне выезжает системная клавиатура, а на
+    // десктопе он просто держит фокус незаметно. Здесь ловим только Enter
+    // (подтверждение), остальные клавиши браузер сам вставляет в поле —
+    // preventDefault() их бы заблокировал, а не только на экране игры
+    if (state === STATE.NAME){
+      if (e.key === 'Enter'){ e.preventDefault(); confirmName(); }
+      return;
+    }
     if (BLOCKED.indexOf(e.code) !== -1) e.preventDefault();
-    // на экране регистрации имени печатаем обычным вводом — гасим и остальные
-    // однобуквенные клавиши, чтобы браузер не пытался что-то с ними сделать
-    if (state === STATE.NAME && e.key && e.key.length === 1) e.preventDefault();
-    handleKey(e.code, e.key);
+    handleKey(e.code);
   }, { passive:false });
+
+  // ---------- регистрация имени: реальный инпут вместо ручного набора клавиш ----------
+  // нужен ради мобильной клавиатуры (у канваса не бывает фокуса — без
+  // настоящего поля браузер её просто не покажет); на десктопе работает
+  // так же, как раньше, просто через штатный ввод текста
+  var nameInputEl = document.getElementById('nameInput');
+  nameInputEl.addEventListener('input', function(){
+    var filtered = nameInputEl.value.replace(/[^A-Za-zА-Яа-яЁё0-9 ]/g, '').slice(0, NAME_MAX);
+    if (filtered !== nameInputEl.value) nameInputEl.value = filtered;
+    nameText = filtered;
+  });
+  function confirmName(){
+    var typed = nameText.replace(/\s+$/, '');
+    save.name = typed || 'ИГРОК';
+    persist();
+    state = STATE.MENU;
+    nameInputEl.blur();
+  }
 
   // ---------- звук: простой чиптюн-синтез через Web Audio, без файлов ----------
   var audioCtx = null;
@@ -580,6 +638,10 @@
   var pausedAt = 0;       // performance.now() в момент ухода на паузу — на сколько сдвинуть startPerf при выходе
   var pausedGameT = 0;    // игровое время (now()) на момент паузы — сцена позади меню рисуется неподвижной, а не продолжает жить
   var state = save.name ? STATE.MENU : STATE.NAME;
+  // фокус сразу при загрузке — на десктопе срабатывает молча, на телефоне
+  // без жеста пользователя клавиатура не выедет, поэтому дублируем фокус
+  // по тапу в handleTap() ниже
+  if (state === STATE.NAME) nameInputEl.focus();
   var startPerf = 0, startAudio = 0;
   var score = 0, combo = 0, maxCombo = 0, hits = 0, misses = 0, avoidedCount = 0, lastUpdateT = 0;
   var health = 100;
@@ -701,26 +763,10 @@
   }
 
   // ---------- ввод ----------
-  function handleKey(code, key){
-    // экран регистрации имени: печатаешь как обычно, Backspace стирает
-    // последнюю букву, Enter подтверждает. Разрешены только буквы, цифры
-    // и пробел — остальное (эмодзи и т.п.) тихо игнорируется, чтобы не
-    // напороться на символ, которого нет в пиксельном шрифте
-    if (state === STATE.NAME){
-      if (key === 'Backspace'){ nameText = nameText.slice(0, -1); return; }
-      if (key === 'Enter'){
-        var typed = nameText.replace(/\s+$/, '');
-        save.name = typed || 'ИГРОК';
-        persist();
-        state = STATE.MENU;
-        return;
-      }
-      if (key && key.length === 1 && /^[A-Za-zА-Яа-яЁё0-9 ]$/.test(key) && nameText.length < NAME_MAX){
-        nameText += key;
-      }
-      return;
-    }
-
+  // экран регистрации имени сюда не попадает: он обрабатывается отдельно,
+  // через настоящий #nameInput и confirmName() (см. выше) — так работает
+  // и мобильная клавиатура, и обычный набор текста на десктопе
+  function handleKey(code){
     // настройки открываются/закрываются клавишей S, но только из меню —
     // внутри уровня (подсказка/игра/пауза/итоги) S остаётся обычной игровой
     // клавишей (в схеме WASD это "вниз") и настройки не трогает
@@ -883,6 +929,81 @@
       }
     }
   }
+
+  function closestIndex(y, ys){
+    var idx = 0, best = Infinity;
+    ys.forEach(function(v, i){ var d = Math.abs(v - y); if (d < best){ best = d; idx = i; } });
+    return idx;
+  }
+
+  /*
+    Мобильная/мышиная версия handleKey: экран сенсорный, физических клавиш
+    нет, поэтому каждое состояние получает свою зону тапа поверх того же
+    текста и колец, которые уже рисуются на экране — ничего нового не
+    придумываем, просто дублируем то, что можно нажать с клавиатуры, тапом
+    в соответствующее место. Игровая логика не дублируется: везде, где
+    можно, тап просто вызывает handleKey() с тем же кодом клавиши.
+  */
+  function handleTap(x, y){
+    if (state === STATE.NAME){ nameInputEl.focus(); return; }
+
+    if (state === STATE.SETTINGS){
+      if (y > 190) handleKey('KeyS');                                    // "S — закрыть"
+      else handleKey(x < W/2 ? 'ArrowLeft' : 'ArrowRight');              // переключить схему
+      return;
+    }
+
+    if (state === STATE.PAUSE){
+      pauseChoice = closestIndex(y, [160, 192, 224]);
+      handleKey('Enter');
+      return;
+    }
+
+    if (state === STATE.PLAY){
+      // маленькая зона в углу — единственный способ поставить игру на паузу
+      // без физической клавиши Escape
+      if (x < 34 && y < 26){ handleKey('Escape'); return; }
+      var lane = closestIndex(x, LANE_X);
+      handleKey(CONTROL_SCHEMES[controlScheme][lane]);
+      return;
+    }
+
+    if (state === STATE.MENU){
+      var g = gridLayout();
+      if (y >= g.startY && y <= g.bottom){
+        var col = Math.floor((x - g.startX) / (TILE + TILE_GAP));
+        var row = Math.floor((y - g.startY) / (TILE + TILE_GAP));
+        if (col >= 0 && col < g.cols && row >= 0 && row < g.rows){
+          var idx = row * g.cols + col;
+          if (idx < LEVELS.length && idx !== levelIdx){ levelIdx = idx; buildChart(levelIdx); }
+        }
+        return;
+      }
+      if (y > g.bottom + 70) handleKey('KeyS');   // "S — настройки"
+      else if (y > g.bottom) handleKey('Enter');  // "ENTER — начать" и всё, что ниже сетки
+      return;
+    }
+
+    if (state === STATE.OVER || state === STATE.CLEAR){
+      resultChoice = closestIndex(y, [200, 232]);
+      handleKey('Enter');
+      return;
+    }
+
+    // подсказка перед уровнем, катсцена, общий итог — везде один тап это Enter
+    handleKey('Enter');
+  }
+
+  // Pointer Events разом покрывают и тач, и мышь — на десктопе тап по тем
+  // же зонам работает кликом, это просто побочный бонус, а не отдельная
+  // "мышиная" функция
+  canvas.addEventListener('pointerdown', function(e){
+    e.preventDefault();
+    var rect = canvas.getBoundingClientRect();
+    var x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    var y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    handleTap(x, y);
+  });
 
   // длительность катсцены обычно одна и та же для всех (CUT_LEN), но финалу
   // после хорошей концовки этого мало для настоящего триумфа — уровень
@@ -1142,6 +1263,13 @@
       }
     }
     drawDisc(cx, cy, 2, color);
+  }
+
+  // две вертикальные полоски в углу экрана — единственная подсказка, куда
+  // тапнуть, чтобы поставить игру на паузу без клавиши Escape (см. handleTap)
+  function drawPauseButton(){
+    px(9, 6, 5, 16, COL.lav);
+    px(20, 6, 5, 16, COL.lav);
   }
 
   /*
@@ -1881,6 +2009,9 @@
     if (showPlayScene) drawHUD(gt);
     if (showPlayScene) drawBonusPops(gt);
     if (showPlayScene && LEVELS[levelIdx].metronome) drawMetronome(gt);
+    // кнопка паузы видна только пока реально играем — на самой паузе там
+    // уже открыто меню, тапать по углу незачем
+    if (state === STATE.PLAY) drawPauseButton();
 
     if (state === STATE.PAUSE){
       ctx.globalAlpha = 0.72;
