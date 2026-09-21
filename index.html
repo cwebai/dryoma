@@ -4,6 +4,16 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>Дрёма — ритм-игра</title>
+<script>
+  // объединённая версия (десктоп + мобильная): режим выбирается один раз при
+  // загрузке по типу указателя — палец (coarse) считается мобильным сценарием
+  // (портретный холст, игра тапом), мышь/трекпад (fine) — десктопным
+  // (широкий холст, игра клавиатурой). Флаг вешаем на window и класс на
+  // <html> сразу, синхронно, до отрисовки — иначе на телефоне на первый кадр
+  // мелькнёт landscape-вёрстка, пока не отработает основной скрипт внизу
+  window.IS_MOBILE = matchMedia('(pointer: coarse)').matches;
+  document.documentElement.classList.toggle('is-mobile', window.IS_MOBILE);
+</script>
 <style>
   /*
     Шаблон ритм-игры по мотивам Melatonin (Half Asleep, 2022): играешь под мелодию,
@@ -158,6 +168,16 @@
     padding:0 8px;
   }
   .hint b{color:var(--cream)}
+
+  /* мобильный режим (см. флаг window.IS_MOBILE выше): портретный холст
+     9:16 вместо десктопного landscape 3:2 — дорожки идут во всю ширину
+     экрана, как в Magic Tiles, а не узкой полосой посередине */
+  html.is-mobile .bezel{
+    width:min(92vw, 480px, calc((92vh - 60px) * 0.5625));
+  }
+  html.is-mobile .screen{
+    aspect-ratio:9/16;
+  }
 </style>
 </head>
 <body>
@@ -179,14 +199,21 @@
   "use strict";
 
   /* ---------- базовая настройка канваса ----------
-     Холст 450×300 растягивается до 900×600, то есть ровно вдвое — масштаб
-     целый, поэтому пиксели остаются жёсткими. Разрешение подняли с 300×200
-     специально ради текста: шрифт чёткий только на кратных 13 кеглях, между
-     13 (мелко и нечитаемо) и 26 (крупно) промежутка нет. Поэтому размер
-     текста на экране регулируется не кеглем, а тем, насколько мелкой клеткой
-     нарезан холст: на 450×300 тот же кегль 26 занимает в полтора раза
-     меньше экрана, чем занимал на 300×200. ---------- */
+     Объединённая версия: десктопный landscape-холст 450×300 (3:2) и
+     мобильный портретный 288×512 (9:16) — выбираются один раз при загрузке
+     по window.IS_MOBILE (см. флаг в <head>). Оба растягиваются CSS-ом до
+     реального размера экрана целым масштабом (через aspect-ratio в .screen),
+     поэтому пиксели остаются жёсткими на любом устройстве. Шрифт чёткий
+     только на кратных 13 кеглях (13/26/39) — это ограничение самого шрифта
+     Epilepsy Sans, а не холста, и разрешение холста на резкость не влияет.
+     ---------- */
+  var IS_MOBILE = !!window.IS_MOBILE;
   var canvas = document.getElementById('game');
+  // портретный холст 288×512 (9:16) в мобильном режиме вместо десктопного
+  // landscape 450×300 (3:2) — дорожки идут во всю ширину экрана и падают на
+  // большем расстоянии, как в Magic Tiles, а не узкой полосой посередине
+  canvas.width = IS_MOBILE ? 288 : 450;
+  canvas.height = IS_MOBILE ? 512 : 300;
   var ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   var W = canvas.width, H = canvas.height;
@@ -288,9 +315,20 @@
   };
   var WASD_LETTERS = ['A', 'W', 'S', 'D'];
   var controlScheme = 'arrows'; // перезаписывается сохранением ниже, после loadSave()
-  var LANE_X = [141, 197, 253, 309]; // центры дорожек, холст 450 шириной
-  var HIT_Y = 258;
-  var SPAWN_Y = 18;
+  // десктоп: узкая полоса дорожек посередине широкого холста, кольца-мишени.
+  // мобильный: дорожки на всю ширину портретного холста, широкий хит-бар
+  // внизу под большой палец — макет "Magic Tiles", а не landscape-полоса
+  var LANE_W = IS_MOBILE ? 72 : 42; // 288/4 дорожки на мобильном, фикс. ширина на десктопе
+  // размер прямоугольной плитки на мобильном — почти во всю ширину дорожки,
+  // с полями по бокам, чтобы была видна граница соседней дорожки
+  var TILE_W = LANE_W - 10, TILE_H = 46, TILE_BORDER = 5;
+  var LANE_X = IS_MOBILE ? [36, 108, 180, 252] : [141, 197, 253, 309]; // центры дорожек
+  var HIT_Y = IS_MOBILE ? 430 : 258;
+  var SPAWN_Y = IS_MOBILE ? 46 : 18;
+  // на мобильном дорожки идут во всю ширину экрана — герою негде стоять
+  // сбоку от них, поэтому его сажаем ниже, под хит-баром и подписями клавиш,
+  // у самого нижнего края, а не поверх зоны удара, как в landscape-версии
+  var HERO_BASE_Y = IS_MOBILE ? H - 40 : H - 28;
   var HIT_WINDOW = 0.16;    // допуск попадания, сек
   var RESTLESS_SWITCH = 0.4; // "Тревожный сон": доля пути, на которой нота перепрыгивает (один раз, не под конец)
   var LEAD_IN = 1.6;        // пауза перед первой нотой
@@ -619,6 +657,12 @@
   // управления показана текстом, а не пиксельной иконкой в кольце
   var controlHintEl = document.getElementById('controlHint');
   function updateHintText(){
+    // на мобильной версии играют тапом по дорожкам — ни стрелки, ни WASD
+    // там ни разу не задействованы, поэтому клавиши в подсказке не упоминаем
+    if (IS_MOBILE){
+      controlHintEl.innerHTML = 'тапай по дорожкам в такт';
+      return;
+    }
     var keys = controlScheme === 'wasd' ? 'A S W D' : '← ↓ ↑ →';
     controlHintEl.innerHTML = keys + ' — играть в такт &nbsp; · &nbsp; <b>Enter</b> — старт / рестарт';
   }
@@ -770,7 +814,10 @@
     // настройки открываются/закрываются клавишей S, но только из меню —
     // внутри уровня (подсказка/игра/пауза/итоги) S остаётся обычной игровой
     // клавишей (в схеме WASD это "вниз") и настройки не трогает
-    if (code === 'KeyS' && (state === STATE.MENU || state === STATE.SETTINGS)){
+    // экран настроек — это переключатель "стрелки/WASD" для иконки под
+    // хит-баром, а на мобильной версии эта иконка не рисуется вовсе (играют
+    // тапом), поэтому сами настройки там не открываются
+    if (code === 'KeyS' && !IS_MOBILE && (state === STATE.MENU || state === STATE.SETTINGS)){
       state = state === STATE.MENU ? STATE.SETTINGS : STATE.MENU;
       return;
     }
@@ -948,13 +995,13 @@
     if (state === STATE.NAME){ nameInputEl.focus(); return; }
 
     if (state === STATE.SETTINGS){
-      if (y > 190) handleKey('KeyS');                                    // "S — закрыть"
+      if (y > (IS_MOBILE ? 310 : 190)) handleKey('KeyS');                // "закрыть"
       else handleKey(x < W/2 ? 'ArrowLeft' : 'ArrowRight');              // переключить схему
       return;
     }
 
     if (state === STATE.PAUSE){
-      pauseChoice = closestIndex(y, [160, 192, 224]);
+      pauseChoice = closestIndex(y, IS_MOBILE ? [272, 326, 380] : [160, 192, 224]);
       handleKey('Enter');
       return;
     }
@@ -979,13 +1026,15 @@
         }
         return;
       }
-      if (y > g.bottom + 70) handleKey('KeyS');   // "S — настройки"
-      else if (y > g.bottom) handleKey('Enter');  // "ENTER — начать" и всё, что ниже сетки
+      // на мобильной версии настроек нет (см. handleKey) — весь тап ниже
+      // сетки уровней просто начинает игру, отдельной зоны для "S" не нужно
+      if (!IS_MOBILE && y > g.bottom + 70) handleKey('KeyS');
+      else if (y > g.bottom) handleKey('Enter');  // "начать" и всё, что ниже сетки
       return;
     }
 
     if (state === STATE.OVER || state === STATE.CLEAR){
-      resultChoice = closestIndex(y, [200, 232]);
+      resultChoice = closestIndex(y, IS_MOBILE ? [340, 394] : [200, 232]);
       handleKey('Enter');
       return;
     }
@@ -1067,9 +1116,10 @@
       return;
     }
 
-    // частицы zzz у спящего героя, почаще при хорошем комбо
+    // частицы zzz у спящего героя, почаще при хорошем комбо — 23px над
+    // головой героя, HERO_BASE_Y задаёт саму голову (см. drawSleeper)
     if (Math.random() < (combo > 4 ? 0.10 : 0.03)){
-      particles.push({ x: W/2 + 27, y: H - 51, life:1, vy:-12 - Math.random()*9 });
+      particles.push({ x: W/2 + 27, y: HERO_BASE_Y - 23, life:1, vy:-12 - Math.random()*9 });
     }
     particles.forEach(function(p){ p.y += p.vy*0.016; p.life -= 0.016; });
     particles = particles.filter(function(p){ return p.life > 0; });
@@ -1183,6 +1233,37 @@
     ctx.drawImage(img, Math.round(cx - img.width/2), Math.round(y));
   }
 
+  /*
+    Перенос длинных строк по словам. Нужен из-за объединения десктопной и
+    мобильной версий в один файл: часть текста (подсказки уровней, итоговая
+    статистика) писалась и мерилась на глаз под landscape-холст 450px
+    шириной, а на портретном мобильном холсте (288px) та же строка на том же
+    кегле в него уже не помещается и вылезает за край экрана. centerText()
+    ниже принимает необязательный maxWidth и прогоняет через эту функцию —
+    на десктопе, где текст и так помещается, перенос ни на что не влияет.
+  */
+  var wrapProbe = document.createElement('canvas').getContext('2d');
+  function measurePixelWidth(str, fontPx){
+    var scale = Math.max(1, Math.round(fontPx / FONT_NATIVE));
+    wrapProbe.font = '400 ' + (FONT_NATIVE * scale) + 'px ' + FONT_FAMILY;
+    return wrapProbe.measureText(str).width;
+  }
+  function wrapPixelText(str, fontPx, maxWidth){
+    var words = String(str).split(' ');
+    var lines = [], cur = '';
+    for (var i = 0; i < words.length; i++){
+      var test = cur ? cur + ' ' + words[i] : words[i];
+      if (cur && measurePixelWidth(test, fontPx) > maxWidth){
+        lines.push(cur);
+        cur = words[i];
+      } else {
+        cur = test;
+      }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+
   // жёсткое кольцо/круг по расстоянию до центра, без сглаживания
   function drawRing(cx, cy, rOuter, rInner, color){
     var r2o = rOuter*rOuter, r2i = rInner*rInner;
@@ -1285,18 +1366,22 @@
     var bandH = Math.ceil(H / bands.length);
     bands.forEach(function(c, i){ px(0, i*bandH, W, bandH+1, c); });
 
-    // луна — честный пиксельный круг + пара кратеров, без развалившихся вырезов
-    drawDisc(387, 48, 16, COL.cream);
-    drawDisc(381, 42, 2, COL.skyTop);
-    drawDisc(393, 52, 2, COL.skyTop);
-    drawDisc(390, 39, 2, COL.skyTop);
+    // луна — честный пиксельный круг + пара кратеров, без развалившихся вырезов.
+    // на мобильном холст уже (288 вместо 450), поэтому луна перенесена в
+    // верхний правый угол портретного холста — на десктопе она почти у
+    // правого края landscape-холста той же высоты, что и HUD
+    var moonX = IS_MOBILE ? 246 : 387, moonY = IS_MOBILE ? 56 : 48;
+    drawDisc(moonX, moonY, 16, COL.cream);
+    drawDisc(moonX-6, moonY-6, 2, COL.skyTop);
+    drawDisc(moonX+6, moonY+4, 2, COL.skyTop);
+    drawDisc(moonX+3, moonY-9, 2, COL.skyTop);
 
     // мягкое сияние вокруг луны — несколько полупрозрачных колец, не резкая
     // граница: свет во сне обычно расплывчатый, а не чёткий, как прожектор
     ctx.globalAlpha = 0.08;
-    drawDisc(387, 48, 24, COL.cream);
+    drawDisc(moonX, moonY, 24, COL.cream);
     ctx.globalAlpha = 0.05;
-    drawDisc(387, 48, 32, COL.cream);
+    drawDisc(moonX, moonY, 32, COL.cream);
     ctx.globalAlpha = 1;
 
     // мерцающие звёзды по всему небу — горизонта больше нет, значит и делить
@@ -1804,7 +1889,7 @@
       }
     }
 
-    drawHero(W/2 + dx, H - 28 + dy, 1, mood);
+    drawHero(W/2 + dx, HERO_BASE_Y + dy, 1, mood);
 
     particles.forEach(function(p){
       ctx.globalAlpha = Math.max(0, p.life);
@@ -1813,30 +1898,48 @@
     });
   }
 
+  var ARROW_DIR = ['left','up','down','right']; // порядок — как у LANES/LANE_X: влево, вверх, вниз, вправо
   function drawLanes(t){
     LANE_X.forEach(function(x, i){
-      px(x-21, 0, 42, H, COL.laneOff);
+      px(x - LANE_W/2, 0, LANE_W, H, COL.laneOff);
+      if (IS_MOBILE && i > 0) px(x - LANE_W/2, 0, 1, H, 'rgba(241,225,249,0.12)'); // граница между дорожками во всю ширину
     });
-    // линия удара
-    px(LANE_X[0]-24, HIT_Y-1, LANE_X[3]-LANE_X[0]+48, 3, COL.lav);
 
-    // кольца-мишени и вспышки — жёсткий круг по расстоянию, пиксельные стрелки, без fillText/arc
-    var ARROW_DIR = ['left','up','down','right'];
-    LANE_X.forEach(function(x, i){
-      var flashed = flashes.some(function(f){ return f.lane === i; });
-      drawRing(x, HIT_Y, 12, 10, flashed ? COL.cream : COL.lav);
-      // в круге мишени показываем ту клавишу, которая реально работает
-      // сейчас: стрелку или букву WASD — в зависимости от выбранной схемы
-      if (controlScheme === 'wasd') drawLetterIcon(WASD_LETTERS[i], x, HIT_Y, COL.cream);
-      else drawArrowIcon(ARROW_DIR[i], x, HIT_Y, COL.cream);
-    });
+    if (IS_MOBILE){
+      /*
+        Мобильный режим: дорожки на всю ширину экрана, плитки падают через
+        весь экран, как в Magic Tiles. Кольцо-мишень заменено на широкий
+        хит-бар — горизонтальную полосу на всю ширину дорожки, которая
+        вспыхивает при попадании. Никакой иконки клавиши под баром не
+        рисуем: играют тапом, стрелки и WASD тут вообще не задействованы.
+      */
+      var barH = 8;
+      LANE_X.forEach(function(x, i){
+        var flashed = flashes.some(function(f){ return f.lane === i; });
+        px(x - LANE_W/2 + 3, HIT_Y - barH/2, LANE_W - 6, barH, flashed ? COL.cream : COL.lav);
+      });
+    } else {
+      // линия удара
+      px(LANE_X[0]-24, HIT_Y-1, LANE_X[3]-LANE_X[0]+48, 3, COL.lav);
+
+      // кольца-мишени и вспышки — жёсткий круг по расстоянию, пиксельные стрелки, без fillText/arc
+      LANE_X.forEach(function(x, i){
+        var flashed = flashes.some(function(f){ return f.lane === i; });
+        drawRing(x, HIT_Y, 12, 10, flashed ? COL.cream : COL.lav);
+        // в круге мишени показываем ту клавишу, которая реально работает
+        // сейчас: стрелку или букву WASD — в зависимости от выбранной схемы
+        if (controlScheme === 'wasd') drawLetterIcon(WASD_LETTERS[i], x, HIT_Y, COL.cream);
+        else drawArrowIcon(ARROW_DIR[i], x, HIT_Y, COL.cream);
+      });
+    }
 
     flashes.forEach(function(f){
       var age = t - f.t;
       var a = Math.max(0, 1 - age/0.25);
       ctx.globalAlpha = a;
       var color = f.kind === 'miss' ? COL.blood : (f.kind === 'whiff' ? COL.violet : COL.cream);
-      px(LANE_X[f.lane]-24, HIT_Y-24, 48, 48, color);
+      if (IS_MOBILE) px(LANE_X[f.lane] - LANE_W/2 + 4, HIT_Y - 26, LANE_W - 8, 52, color);
+      else px(LANE_X[f.lane]-24, HIT_Y-24, 48, 48, color);
       ctx.globalAlpha = 1;
     });
   }
@@ -1864,8 +1967,13 @@
       lanesToDraw.forEach(function(lane){
         var x = LANE_X[lane] + jitter;
         if (LEVELS[levelIdx].noteShape === 'heart'){
-          drawHeart(x, y, 8, COL.violet);
-          drawHeart(x, y, 5, innerColor);
+          drawHeart(x, y, IS_MOBILE ? 16 : 8, COL.violet);
+          drawHeart(x, y, IS_MOBILE ? 10 : 5, innerColor);
+        } else if (IS_MOBILE){
+          // почти во всю ширину дорожки, с полями по бокам, чтобы была видна
+          // граница соседней дорожки (TILE_W = LANE_W - 10)
+          px(x - TILE_W/2, y - TILE_H/2, TILE_W, TILE_H, COL.violet);
+          px(x - TILE_W/2 + TILE_BORDER, y - TILE_H/2 + TILE_BORDER, TILE_W - TILE_BORDER*2, TILE_H - TILE_BORDER*2, innerColor);
         } else {
           px(x-8, y-8, 16, 16, COL.violet);
           px(x-5, y-5, 10, 10, innerColor);
@@ -1883,10 +1991,26 @@
   function drawMetronome(t){
     var e = beatEnergy(t);
     var r = 3 + e * 3;
-    drawDisc(W/2, 10, r, e > 0.5 ? COL.cream : COL.lav);
+    drawDisc(W/2, IS_MOBILE ? 34 : 10, r, e > 0.5 ? COL.cream : COL.lav);
   }
 
   function drawHUD(t){
+    if (IS_MOBILE){
+      /*
+        Дорожки теперь во всю ширину экрана — боковых полей для очков/комбо,
+        как в landscape-версии, больше нет. Левый верхний угол занят кнопкой
+        паузы, поэтому HUD сжат в тонкую полосу справа: шкала сна сверху на
+        всю ширину, очки и комбо одной строкой мелкого кегля справа от неё —
+        всё умещается над SPAWN_Y, ничего не перекрывая.
+      */
+      var barW = W - 12, barX = 6;
+      px(barX, 2, barW, 3, 'rgba(241,225,249,0.15)');
+      px(barX, 2, barW * Math.max(0,health)/100, 3, health > 30 ? COL.lav : COL.blood);
+
+      var hudImg = pixelTextCanvas(score + ' · x' + combo, FONT_NATIVE, COL.cream);
+      ctx.drawImage(hudImg, W - 6 - hudImg.width, 12);
+      return;
+    }
     // дорожки занимают x=81..220, поэтому HUD живёт в свободном левом поле,
     // а шкала сна — в правом: так крупный текст ни с чем не пересекается
     drawPixelText('очки', 10, 8, TEXT, COL.lav);
@@ -1905,7 +2029,7 @@
     bonusPops.forEach(function(b){
       var age = t - b.t;
       ctx.globalAlpha = Math.max(0, 1 - age / 1.4);
-      drawPixelTextCentered(b.text, W/2, 72 - age * 14, TEXT, COL.cream);
+      drawPixelTextCentered(b.text, W/2, (IS_MOBILE ? 120 : 72) - age * 14, IS_MOBILE ? FONT_NATIVE : TEXT, COL.cream);
       ctx.globalAlpha = 1;
     });
   }
@@ -1923,7 +2047,7 @@
     var gridW = cols * TILE + (cols - 1) * TILE_GAP;
     var gridH = rows * TILE + (rows - 1) * TILE_GAP;
     var startX = Math.round((W - gridW) / 2);
-    var startY = 80;
+    var startY = IS_MOBILE ? 100 : 80; // на мобильном ниже заголовка и луны на фоне
     return { cols: cols, rows: rows, startX: startX, startY: startY, bottom: startY + gridH };
   }
   function drawLevelGrid(t){
@@ -1957,11 +2081,21 @@
     return g.bottom;
   }
 
-  function centerText(lines, y0, size, color){
-    var lead = (size||FONT_NATIVE) + 3;
-    lines.forEach(function(line, i){
-      if (line) drawPixelTextCentered(line, W/2, y0 + i*lead, size||FONT_NATIVE, color || COL.cream);
+  function centerText(lines, y0, size, color, maxWidth){
+    var fontPx = size || FONT_NATIVE;
+    var lead = fontPx + 3;
+    var out = lines;
+    if (maxWidth){
+      out = [];
+      lines.forEach(function(line){
+        if (!line) { out.push(line); return; }
+        out = out.concat(wrapPixelText(line, fontPx, maxWidth));
+      });
+    }
+    out.forEach(function(line, i){
+      if (line) drawPixelTextCentered(line, W/2, y0 + i*lead, fontPx, color || COL.cream);
     });
+    return out.length; // сколько строк реально нарисовано — нужно, чтобы сдвинуть следующий текст, если было перенесено
   }
 
   /*
@@ -1984,10 +2118,10 @@
       px(mx, my, 2, 2, LEVELS[i].endingColor || COL.cream);
     }
     drawHero(cx, cy + bob, s, 'happy');
-    centerText(['ВСЕ СНЫ ПРОЙДЕНЫ'], 30, TITLE, COL.cream);
+    centerText(['ВСЕ СНЫ ПРОЙДЕНЫ'], 30, TITLE, COL.cream, W - 32);
     centerText([save.name + '  ·  ' + allLevelsBestTotal() + ' очков суммарно  ·  ' + clearedCount() + '/' + LEVELS.length],
-               72, FONT_NATIVE, COL.lav);
-    if (Math.floor(t*2) % 2 === 0) centerText(['ENTER — в меню'], H - 26, TEXT, COL.cream);
+               72, FONT_NATIVE, COL.lav, W - 32);
+    if (Math.floor(t*2) % 2 === 0) centerText([IS_MOBILE ? 'тап — в меню' : 'ENTER — в меню'], H - 26, TEXT, COL.cream);
   }
 
   function render(){
@@ -2013,92 +2147,129 @@
     // уже открыто меню, тапать по углу незачем
     if (state === STATE.PLAY) drawPauseButton();
 
+    // объединённая версия: часть подсказок и статистики — переменной длины
+    // (имя игрока, очки, названия снов) и мерялась на глаз под landscape
+    // холст 450px шириной. На портретном мобильном холсте (288px) она уже не
+    // помещается и вылезает за край экрана, поэтому такие строки идут через
+    // centerText(..., maxWidth) — на десктопе, где и так есть запас, перенос
+    // ни на что не влияет, там мы просто добавляем не срабатывающую страховку
+    var TXW = W - 32;
+
     if (state === STATE.PAUSE){
       ctx.globalAlpha = 0.72;
       px(0, 0, W, H, COL.ink);
       ctx.globalAlpha = 1;
-      centerText(['ПАУЗА'], 100, TITLE, COL.cream);
+      centerText(['ПАУЗА'], IS_MOBILE ? 170 : 100, TITLE, COL.cream);
       var pBlink = Math.floor(t*2) % 2 === 0;
-      centerText(['ПРОДОЛЖИТЬ'], 160, TEXT, pauseChoice === 0 ? (pBlink ? COL.cream : COL.lav) : COL.lav);
-      centerText(['ЗАНОВО'],      192, TEXT, pauseChoice === 1 ? (pBlink ? COL.cream : COL.lav) : COL.lav);
-      centerText(['В МЕНЮ'],      224, TEXT, pauseChoice === 2 ? (pBlink ? COL.cream : COL.lav) : COL.lav);
+      centerText(['ПРОДОЛЖИТЬ'], IS_MOBILE ? 272 : 160, TEXT, pauseChoice === 0 ? (pBlink ? COL.cream : COL.lav) : COL.lav);
+      centerText(['ЗАНОВО'],      IS_MOBILE ? 326 : 192, TEXT, pauseChoice === 1 ? (pBlink ? COL.cream : COL.lav) : COL.lav);
+      centerText(['В МЕНЮ'],      IS_MOBILE ? 380 : 224, TEXT, pauseChoice === 2 ? (pBlink ? COL.cream : COL.lav) : COL.lav);
       return;
     }
 
     if (state === STATE.NAME){
-      centerText(['КАК ТЕБЯ ЗВАТЬ?'], 56, TEXT, COL.cream);
+      centerText(['КАК ТЕБЯ ЗВАТЬ?'], IS_MOBILE ? 95 : 56, TEXT, COL.cream);
       var blinkOn = Math.floor(t*3) % 2 === 0;
       var nameImg = pixelTextCanvas(nameText.length ? nameText : ' ', TEXT, COL.cream);
-      var nameX = Math.round(W/2 - nameImg.width/2), nameY = 120;
+      var nameY = IS_MOBILE ? 205 : 120;
+      var nameX = Math.round(W/2 - nameImg.width/2);
       ctx.drawImage(nameImg, nameX, nameY);
       if (blinkOn) px(nameX + nameImg.width + 4, nameY + 4, 3, TEXT - 8, COL.cream);   // курсор — мигающая палочка, не буква
-      centerText(['печатай, Backspace — стереть'], 168, FONT_NATIVE, COL.lav);
-      if (Math.floor(t*2) % 2 === 0) centerText(['ENTER — готово'], 198, TEXT, COL.cream);
+      // на мобильной версии поля нет физической клавиатуры — печатают на
+      // системной, которую открывает тап по невидимому #nameInput
+      if (IS_MOBILE){
+        centerText(['тап откроет клавиатуру'], 286, FONT_NATIVE, COL.lav, TXW);
+        if (Math.floor(t*2) % 2 === 0) centerText(['Готово — на клавиатуре'], 340, TEXT, COL.cream, TXW);
+      } else {
+        centerText(['печатай, Backspace — стереть'], 168, FONT_NATIVE, COL.lav, TXW);
+        if (Math.floor(t*2) % 2 === 0) centerText(['ENTER — готово'], 198, TEXT, COL.cream);
+      }
     }
 
     if (state === STATE.HINT){
       var hlv = LEVELS[levelIdx];
-      centerText([(levelIdx + 1) + '. ' + hlv.name], 74, TITLE, COL.cream);
-      centerText([hlv.hint || ''], 140, FONT_NATIVE, COL.lav);
-      if (Math.floor(t*2) % 2 === 0) centerText(['ENTER — начать'], 200, TEXT, COL.cream);
-      centerText(['Esc — пауза во время игры'], 232, FONT_NATIVE, COL.lav);
+      centerText([(levelIdx + 1) + '. ' + hlv.name], IS_MOBILE ? 128 : 74, TITLE, COL.cream, TXW);
+      centerText([hlv.hint || ''], IS_MOBILE ? 238 : 140, FONT_NATIVE, COL.lav, TXW);
+      if (IS_MOBILE){
+        if (Math.floor(t*2) % 2 === 0) centerText(['тап — начать'], 340, TEXT, COL.cream);
+        centerText(['иконка в углу — пауза во время игры'], 394, FONT_NATIVE, COL.lav, TXW);
+      } else {
+        if (Math.floor(t*2) % 2 === 0) centerText(['ENTER — начать'], 200, TEXT, COL.cream);
+        centerText(['Esc — пауза во время игры'], 232, FONT_NATIVE, COL.lav);
+      }
     }
 
     if (state === STATE.MENU){
-      centerText(['Д Р Ё М А'], 20, TITLE, COL.cream);
+      centerText(['Д Р Ё М А'], IS_MOBILE ? 34 : 20, TITLE, COL.cream);
       var gridBottom = drawLevelGrid(t);
       var locked = !isUnlocked(levelIdx);
-      centerText([(levelIdx + 1) + '. ' + LEVELS[levelIdx].name], gridBottom + 8, TEXT, locked ? COL.lav : COL.cream);
-      centerText([save.name + '  ·  рекорд ' + levelBest(levelIdx) + '  ·  цель ' + requiredScore() + '  ·  всего ' + save.total],
-                 gridBottom + 42, FONT_NATIVE, COL.lav);
-      if (locked){
-        centerText(['пройди предыдущий сон'], gridBottom + 60, TEXT, COL.lav);
-      } else if (Math.floor(t*2) % 2 === 0){
-        centerText(['ENTER — начать'], gridBottom + 60, TEXT, COL.cream);
+      centerText([(levelIdx + 1) + '. ' + LEVELS[levelIdx].name], gridBottom + (IS_MOBILE ? 10 : 8), TEXT, locked ? COL.lav : COL.cream, TXW);
+      if (IS_MOBILE){
+        // имя, рекорд, цель и общий счёт вместе не помещаются в одну строку
+        // на 288px холсте — та же информация, что и на десктопе, но в два ряда
+        centerText([save.name + '  ·  рекорд ' + levelBest(levelIdx)], gridBottom + 44, FONT_NATIVE, COL.lav, TXW);
+        centerText(['цель ' + requiredScore() + '  ·  всего ' + save.total], gridBottom + 60, FONT_NATIVE, COL.lav, TXW);
+      } else {
+        centerText([save.name + '  ·  рекорд ' + levelBest(levelIdx) + '  ·  цель ' + requiredScore() + '  ·  всего ' + save.total],
+                   gridBottom + 42, FONT_NATIVE, COL.lav, TXW);
       }
-      centerText(['S — настройки'], gridBottom + 82, FONT_NATIVE, COL.lav);
+      var menuActionY = gridBottom + (IS_MOBILE ? 82 : 60);
+      if (locked){
+        centerText(['пройди предыдущий сон'], menuActionY, TEXT, COL.lav, TXW);
+      } else if (Math.floor(t*2) % 2 === 0){
+        centerText([IS_MOBILE ? 'тап — начать' : 'ENTER — начать'], menuActionY, TEXT, COL.cream, TXW);
+      }
+      // настройки — это переключатель стрелки/WASD для иконки под хит-баром;
+      // на мобильной версии этой иконки нет вовсе (играют тапом), поэтому и
+      // пункт настроек там не показываем (см. handleKey/handleTap)
+      if (!IS_MOBILE) centerText(['S — настройки'], gridBottom + 82, FONT_NATIVE, COL.lav);
     }
 
     if (state === STATE.SETTINGS){
-      drawGear(W/2, 56, 10, COL.lav);
-      centerText(['НАСТРОЙКИ'], 84, TITLE, COL.cream);
-      centerText(['управление'], 132, FONT_NATIVE, COL.lav);
+      drawGear(W/2, IS_MOBILE ? 95 : 56, IS_MOBILE ? 12 : 10, COL.lav);
+      centerText(['НАСТРОЙКИ'], IS_MOBILE ? 143 : 84, TITLE, COL.cream);
+      centerText(['управление'], IS_MOBILE ? 224 : 132, FONT_NATIVE, COL.lav);
       var schemeLabel = controlScheme === 'wasd' ? 'WASD' : 'СТРЕЛКИ';
-      centerText(['← ' + schemeLabel + ' →'], 156, TEXT, COL.cream);
-      centerText(['S — закрыть'], 210, TEXT, COL.lav);
+      centerText(['← ' + schemeLabel + ' →'], IS_MOBILE ? 265 : 156, TEXT, COL.cream, TXW);
+      centerText([IS_MOBILE ? 'тап здесь — закрыть' : 'S — закрыть'], IS_MOBILE ? 357 : 210, TEXT, COL.lav, TXW);
     }
 
     if (state === STATE.OVER || state === STATE.CLEAR){
       var lv2 = LEVELS[levelIdx];
       var good = state === STATE.CLEAR;
       var title = good ? lv2.endings.good : lv2.endings.bad;
-      centerText([title], 38, TITLE, good ? COL.cream : COL.blood);
+      centerText([title], IS_MOBILE ? 65 : 38, TITLE, good ? COL.cream : COL.blood, TXW);
 
       var statLine = good
         ? 'очки: ' + score + '   точно: ' + (hits + avoidedCount) + '/' + totalActions
         : (scoreShortfall ? 'очки: ' + score + ' из ' + requiredScore() : 'очки: ' + score);
-      centerText([statLine], 96, TEXT, COL.cream);
+      // на мобильном экран уже, поэтому статистика идёт мелким (родным)
+      // кеглем вместо TEXT — так она достоверно умещается в одну строку и
+      // не наезжает на строку рекорда следом, даже с четырёхзначными очками
+      var statSize = IS_MOBILE ? FONT_NATIVE : TEXT;
+      centerText([statLine], IS_MOBILE ? 163 : 96, statSize, COL.cream, TXW);
 
-      centerText([newLevelRecord ? 'новый рекорд!' : 'рекорд: ' + levelBest(levelIdx)], 126,
-                 TEXT, newLevelRecord ? COL.cream : COL.lav);
+      centerText([newLevelRecord ? 'новый рекорд!' : 'рекорд: ' + levelBest(levelIdx)], IS_MOBILE ? 214 : 126,
+                 statSize, newLevelRecord ? COL.cream : COL.lav, TXW);
 
       var deltaLine = lastDelta === null ? 'первый раз на этом сне'
         : lastDelta > 0 ? '+' + lastDelta + ' к прошлому разу'
         : lastDelta < 0 ? lastDelta + ' к прошлому разу'
         : 'ровно как в прошлый раз';
-      centerText([deltaLine], 152, FONT_NATIVE, COL.lav);
+      centerText([deltaLine], IS_MOBILE ? 258 : 152, FONT_NATIVE, COL.lav, TXW);
 
       var hasNext = good && levelIdx + 1 < LEVELS.length;
       var blink = Math.floor(t*2) % 2 === 0;
+      var opt1Y = IS_MOBILE ? 340 : 200, opt2Y = IS_MOBILE ? 394 : 232;
       if (hasNext){
-        centerText(['СЛЕДУЮЩИЙ СОН'], 200, TEXT, resultChoice === 0 ? (blink ? COL.cream : COL.lav) : COL.lav);
-        centerText(['В МЕНЮ'], 232, TEXT, resultChoice === 1 ? (blink ? COL.cream : COL.lav) : COL.lav);
+        centerText(['СЛЕДУЮЩИЙ СОН'], opt1Y, TEXT, resultChoice === 0 ? (blink ? COL.cream : COL.lav) : COL.lav);
+        centerText(['В МЕНЮ'], opt2Y, TEXT, resultChoice === 1 ? (blink ? COL.cream : COL.lav) : COL.lav);
       } else if (good){
-        // это последний сон — Enter ведёт не в меню, а на экран общего итога
-        if (blink) centerText(['ИТОГИ'], 216, TEXT, COL.cream);
+        // это последний сон — тап/Enter ведёт не в меню, а на экран общего итога
+        if (blink) centerText(['ИТОГИ'], IS_MOBILE ? 367 : 216, TEXT, COL.cream);
       } else {
-        centerText(['ЕЩЁ РАЗ'], 200, TEXT, resultChoice === 0 ? (blink ? COL.cream : COL.lav) : COL.lav);
-        centerText(['В МЕНЮ'], 232, TEXT, resultChoice === 1 ? (blink ? COL.cream : COL.lav) : COL.lav);
+        centerText(['ЕЩЁ РАЗ'], opt1Y, TEXT, resultChoice === 0 ? (blink ? COL.cream : COL.lav) : COL.lav);
+        centerText(['В МЕНЮ'], opt2Y, TEXT, resultChoice === 1 ? (blink ? COL.cream : COL.lav) : COL.lav);
       }
     }
 
