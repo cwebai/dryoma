@@ -555,7 +555,7 @@
   var ENDLESS_IDX = LEVELS.length;
   var TOTAL_TILES = LEVELS.length + 1;
   var ENDLESS_LEVEL = {
-    name: 'бесконечный сон',
+    name: 'бесконечный режим',
     endless: true,
     bpm: 100,
     missPenalty: 14,
@@ -1120,13 +1120,18 @@
     }
 
     if (state === STATE.MENU){
+      var eb = endlessButtonBounds();
+      if (x >= eb.x && x <= eb.x + eb.w && y >= eb.y && y <= eb.y + eb.h){
+        if (levelIdx !== ENDLESS_IDX){ levelIdx = ENDLESS_IDX; buildChart(levelIdx); }
+        return;
+      }
       var g = gridLayout();
       if (y >= g.startY && y <= g.bottom){
         var col = Math.floor((x - g.startX) / (TILE + TILE_GAP));
         var row = Math.floor((y - g.startY) / (TILE + TILE_GAP));
         if (col >= 0 && col < g.cols && row >= 0 && row < g.rows){
           var idx = row * g.cols + col;
-          if (idx < TOTAL_TILES && idx !== levelIdx){ levelIdx = idx; buildChart(levelIdx); }
+          if (idx < LEVELS.length && idx !== levelIdx){ levelIdx = idx; buildChart(levelIdx); }
         }
         return;
       }
@@ -2158,10 +2163,12 @@
   */
   var TILE = 56, TILE_GAP = 12;   // уменьшены под два ряда (8 снов), чтобы под сеткой осталось место для текста
   function gridLayout(){
-    // TOTAL_TILES = LEVELS.length + 1 — восемь снов плюс девятая плитка
-    // бесконечного сна; при 4 в ряд девятая уходит в третий ряд
-    var cols = Math.min(TOTAL_TILES, 4);
-    var rows = Math.ceil(TOTAL_TILES / cols);
+    // сетка — только восемь фиксированных снов, как и было; бесконечный
+    // режим сюда не входит (см. drawEndlessButton) — девятая плитка внутри
+    // этой же сетки раньше сдвигала её на третий ряд и утапливала текст
+    // под сеткой (имя/рекорд/подсказку) ниже видимой области экрана
+    var cols = Math.min(LEVELS.length, 4);
+    var rows = Math.ceil(LEVELS.length / cols);
     var gridW = cols * TILE + (cols - 1) * TILE_GAP;
     var gridH = rows * TILE + (rows - 1) * TILE_GAP;
     var startX = Math.round((W - gridW) / 2);
@@ -2170,7 +2177,7 @@
   }
   function drawLevelGrid(t){
     var g = gridLayout();
-    for (var i = 0; i < TOTAL_TILES; i++){
+    for (var i = 0; i < LEVELS.length; i++){
       var col = i % g.cols, row = Math.floor(i / g.cols);
       var x = g.startX + col * (TILE + TILE_GAP);
       var y = g.startY + row * (TILE + TILE_GAP);
@@ -2189,8 +2196,7 @@
       px(x + TILE - bw, y + bob, bw, TILE, bc);
 
       ctx.globalAlpha = locked ? 0.35 : 1;
-      var tileLabel = i === ENDLESS_IDX ? '∞' : String(i + 1);
-      drawPixelTextCentered(tileLabel, x + TILE/2, y + bob + TILE/2 - 13, TEXT, COL.cream);
+      drawPixelTextCentered(String(i + 1), x + TILE/2, y + bob + TILE/2 - 13, TEXT, COL.cream);
       ctx.globalAlpha = 1;
 
       if (levelBest(i) > 0){                       // пройденный уровень — метка в углу
@@ -2198,6 +2204,47 @@
       }
     }
     return g.bottom;
+  }
+
+  /*
+    Бесконечный режим не входит в сетку восьми снов (см. комментарий в
+    gridLayout выше) — это отдельная небольшая кнопка в свободном углу
+    экрана, слева над сеткой, симметрично лунному значку в правом углу.
+    Ширина считается по фактической ширине надписи (measurePixelWidth),
+    поэтому текст никогда не обрезается и не выходит за рамку. Раздельные
+    bounds/draw: hit-тест тапа использует неподвижные координаты, а покачивание
+    выбранной кнопки (bob) — только при отрисовке, чтобы зона тапа не гуляла.
+  */
+  function endlessButtonBounds(){
+    var w = measurePixelWidth(ENDLESS_LEVEL.name, FONT_NATIVE) + 16;
+    var h = FONT_NATIVE + 12;
+    var x = IS_MOBILE ? 8 : 10, y = IS_MOBILE ? 6 : 8;
+    return { x: x, y: y, w: w, h: h };
+  }
+  function drawEndlessButton(t){
+    var b = endlessButtonBounds();
+    var selected = levelIdx === ENDLESS_IDX;
+    var locked = !isUnlocked(ENDLESS_IDX);
+    var bob = selected ? Math.sin(t * 4) * 2 : 0;
+    var y = b.y + bob;
+
+    ctx.globalAlpha = locked ? 0.05 : (selected ? 0.30 : 0.14);
+    px(b.x, y, b.w, b.h, COL.violet);
+    ctx.globalAlpha = 1;
+
+    var bw = selected ? 2 : 1, bc = locked ? 'rgba(172,169,230,0.25)' : (selected ? COL.cream : COL.lav);
+    px(b.x, y, b.w, bw, bc);
+    px(b.x, y + b.h - bw, b.w, bw, bc);
+    px(b.x, y, bw, b.h, bc);
+    px(b.x + b.w - bw, y, bw, b.h, bc);
+
+    ctx.globalAlpha = locked ? 0.35 : 1;
+    drawPixelTextCentered(ENDLESS_LEVEL.name, b.x + b.w/2, y + (b.h - 13)/2, FONT_NATIVE, COL.cream);
+    ctx.globalAlpha = 1;
+
+    if (levelBest(ENDLESS_IDX) > 0){              // пройденный ранее заход — метка в углу, как у обычных плиток
+      px(b.x + b.w - 9, y + 5, 4, 4, COL.lav);
+    }
   }
 
   function centerText(lines, y0, size, color, maxWidth){
@@ -2321,6 +2368,7 @@
 
     if (state === STATE.MENU){
       centerText(['Д Р Ё М А'], IS_MOBILE ? 34 : 20, TITLE, COL.cream);
+      drawEndlessButton(t);
       var gridBottom = drawLevelGrid(t);
       var locked = !isUnlocked(levelIdx);
       var isEndlessSel = levelIdx === ENDLESS_IDX;
