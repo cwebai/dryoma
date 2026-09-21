@@ -537,12 +537,105 @@
   var levelIdx = 0;
   var DOUBLE_BONUS = 80;   // сверх обычных очков, когда обе дорожки двойной ноты взяты вовремя
 
+  /*
+    Бесконечный сон: отдельный, девятый пункт меню, который не живёт внутри
+    LEVELS — у фиксированных снов есть чёткий конец (songEnd), общий финал
+    после восьмого сна (drawFinale/FINALE-состояние) и цепочка разблокировки
+    по clearedCount. Бесконечный режим не проходится и не "открывает"
+    следующий сон, поэтому не добавляется в сам массив LEVELS (это сломало
+    бы подсчёт "8 снов" в финале и условие hasNext на экране итогов), а
+    существует как девятая, отдельная плитка с собственным виртуальным
+    индексом ENDLESS_IDX = LEVELS.length. curLevelDef(i) — единая точка
+    доступа к "текущему уровню" вместо прямого LEVELS[levelIdx] везде по
+    игре: для обычного индекса отдаёт LEVELS[i], а для ENDLESS_IDX — этот
+    псевдо-уровень. Разблокируется он естественно, по той же формуле
+    isUnlocked(), что и обычные сны: как девятая плитка она открывается,
+    когда пройден восьмой сон ("последний сон").
+  */
+  var ENDLESS_IDX = LEVELS.length;
+  var TOTAL_TILES = LEVELS.length + 1;
+  var ENDLESS_LEVEL = {
+    name: 'бесконечный сон',
+    endless: true,
+    bpm: 100,
+    missPenalty: 14,
+    endings: { bad: 'СОН ПРЕРВАН' },
+    hint: 'ноты падают быстрее с каждой минутой — играй, пока хватает сил',
+  };
+  function curLevelDef(i){ return i === ENDLESS_IDX ? ENDLESS_LEVEL : LEVELS[i]; }
+
   function lerp(a,b,k){ return a + (b-a)*k; }
 
   // эти величины зависят от выбранного уровня и пересобираются на старте
   var BEAT, TRAVEL, chart, songEnd, totalActions, echoes;
   var ECHO_DELAY = 0.32, ECHO_WINDOW = 0.18, ECHO_BONUS = 50;
+
+  /*
+    Процедурная генерация бесконечного сна: вместо заранее написанного
+    pattern (как у обычных снов) ноты досочиняются на лету, пока играем —
+    см. growEndlessChart() в update(). Сложность растёт двумя способами:
+    сам темп (bpm) поднимается со временем до потолка в 176, а шанс
+    ловушки ("avoid", как в "Кошмаре") и двойной ноты (как в "Полёте")
+    постепенно включается после первых нот — чтобы начало было мягким, а
+    не сразу пугающим.
+  */
+  var endlessIdx = 0, endlessNextT = 0;
+  var ENDLESS_LOOKAHEAD = 6; // сек нот всегда держим сгенерированными вперёд
+  function endlessBpmAt(i){ return Math.min(176, ENDLESS_LEVEL.bpm + Math.floor(i / 20) * 4); }
+  function endlessNoteSpec(i){
+    var lane = Math.floor(Math.random() * 4);
+    var avoidChance = Math.min(0.22, Math.max(0, (i - 24) / 260));
+    if (Math.random() < avoidChance) return { lanes: [lane], type: 'avoid' };
+    var doubleChance = Math.min(0.20, Math.max(0, (i - 12) / 220));
+    if (Math.random() < doubleChance){
+      var lane2 = (lane + 1 + Math.floor(Math.random() * 3)) % 4;
+      return { lanes: lane < lane2 ? [lane, lane2] : [lane2, lane], type: 'normal' };
+    }
+    return { lanes: [lane], type: 'normal' };
+  }
+  function pushEndlessNote(){
+    var beat = 60 / endlessBpmAt(endlessIdx);
+    var spec = endlessNoteSpec(endlessIdx);
+    var n = { lanes: spec.lanes, type: spec.type, jumps: null, demo: false,
+              t: endlessNextT, travel: beat * 2, judged: false, pressedCount: 0, result: null };
+    endlessNextT += beat;
+    endlessIdx++;
+    chart.push(n);
+    return n;
+  }
+  // просто дописывает ноты (без звука) на ENDLESS_LOOKAHEAD секунд вперёд от t
+  function fillEndlessChart(t){
+    while (chart.length === 0 || chart[chart.length - 1].t < t + ENDLESS_LOOKAHEAD){
+      pushEndlessNote();
+    }
+  }
+  // то же самое, но ещё и планирует звук новых нот — только для порций,
+  // дописанных во время самой игры (state PLAY), когда startAudio уже задан.
+  // Стартовая порция chart звучит иначе: buildChart() может быть вызван и
+  // при обычной навигации по меню (стрелками влево/вправо), задолго до
+  // старта игры и появления audioCtx, поэтому buildEndlessChart ниже зовёт
+  // fillEndlessChart (без звука) — а её собственное озвучивание делает
+  // общий chart.forEach(scheduleNoteBeeps) в startGame(), как и у обычных
+  // уровней
+  function growEndlessChart(t){
+    while (chart.length === 0 || chart[chart.length - 1].t < t + ENDLESS_LOOKAHEAD){
+      scheduleNoteBeeps(pushEndlessNote());
+    }
+  }
+  function buildEndlessChart(){
+    BEAT = 60 / ENDLESS_LEVEL.bpm;
+    TRAVEL = BEAT * 2;
+    chart = [];
+    echoes = [];
+    endlessIdx = 0;
+    endlessNextT = LEAD_IN;
+    songEnd = Infinity;     // бесконечный сон никогда не заканчивается сам — только по здоровью
+    totalActions = 0;
+    fillEndlessChart(0);
+  }
+
   function buildChart(idx){
+    if (idx === ENDLESS_IDX){ buildEndlessChart(); return; }
     var lv = LEVELS[idx];
     BEAT = 60 / lv.bpm;
     TRAVEL = BEAT * 2;      // нота падает два такта — базовое время долёта до линии
@@ -705,12 +798,30 @@
 
   function now(){ return (performance.now() - startPerf) / 1000; }
 
+  // тихий пульс-метроном каждой ноты — общий код для стартовой партии chart
+  // (startGame) и для порций, дописываемых на лету в бесконечном сне
+  // (growEndlessChart)
+  function scheduleNoteBeeps(n){
+    n.lanes.forEach(function(l){
+      beep(startAudio + n.t, LANES[l].pitch / 2, 0.14, 'triangle', 0.05);
+    });
+    // "Дежавю", показанная половина фразы (demo:true): звучит настоящим
+    // тоном сама по себе, не дожидаясь нажатия — иначе, если во время
+    // показа честно смотреть и не нажимать, мелодия молчит и повторять
+    // по памяти нечего. Скрытый повтор так не делает — там тон должен
+    // прийти от попадания, это и есть проверка памяти
+    if (n.demo){
+      n.lanes.forEach(function(l){
+        beep(startAudio + n.t, LANES[l].pitch, 0.16, 'square', 0.10);
+      });
+    }
+  }
+
   function startGame(){
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
 
     stopMusic();
-    buildChart(levelIdx);
     score = 0; combo = 0; maxCombo = 0; hits = 0; misses = 0; avoidedCount = 0; health = 100; lastUpdateT = 0;
     flashes = []; particles = []; bonusPops = [];
     // recentPresses хранит игровое время t = now(), которое обнуляется на каждом
@@ -724,6 +835,7 @@
 
     startPerf = performance.now();
     startAudio = audioCtx.currentTime + 0.05;
+    buildChart(levelIdx);
 
     /*
       Раньше вся мелодия (основной тон каждой ноты) планировалась заранее и
@@ -733,25 +845,16 @@
       вторым, приглушённым тоном) — он держит ритм на слух с самого начала.
       Основной тон каждой ноты теперь звучит вживую из handleKey/update —
       в момент попадания, промаха или удачно обойдённой ловушки.
+
+      Бесконечный сон озвучивает свою первую порцию нот здесь же, как и
+      обычные уровни; дальнейшие порции, дописываемые уже во время игры,
+      озвучивает сам growEndlessChart() внутри update() — тем же
+      scheduleNoteBeeps, но по мере появления новых нот.
     */
-    chart.forEach(function(n){
-      n.lanes.forEach(function(l){
-        beep(startAudio + n.t, LANES[l].pitch / 2, 0.14, 'triangle', 0.05);
-      });
-      // "Дежавю", показанная половина фразы (demo:true): звучит настоящим
-      // тоном сама по себе, не дожидаясь нажатия — иначе, если во время
-      // показа честно смотреть и не нажимать, мелодия молчит и повторять
-      // по памяти нечего. Скрытый повтор так не делает — там тон должен
-      // прийти от попадания, это и есть проверка памяти
-      if (n.demo){
-        n.lanes.forEach(function(l){
-          beep(startAudio + n.t, LANES[l].pitch, 0.16, 'square', 0.10);
-        });
-      }
-    });
+    chart.forEach(scheduleNoteBeeps);
     // "Дежавю": отдельный ровный щелчок метронома на каждый такт (не по высоте
     // дорожки, а нейтральный) — по нему понятно, где начинается повтор
-    if (LEVELS[levelIdx].metronome){
+    if (curLevelDef(levelIdx).metronome){
       chart.forEach(function(n){
         beep(startAudio + n.t, 1600, 0.03, 'square', 0.05);
       });
@@ -879,10 +982,11 @@
       if (optionCount === 2 && (code === 'ArrowUp' || code === 'ArrowDown')) resultChoice = resultChoice === 0 ? 1 : 0;
       return;
     }
-    // в меню стрелки влево-вправо листают уровни по кругу
+    // в меню стрелки влево-вправо листают уровни по кругу — включая девятую
+    // плитку бесконечного сна (TOTAL_TILES = LEVELS.length + 1)
     if (state === STATE.MENU){
-      if (code === 'ArrowLeft')  levelIdx = (levelIdx + LEVELS.length - 1) % LEVELS.length;
-      if (code === 'ArrowRight') levelIdx = (levelIdx + 1) % LEVELS.length;
+      if (code === 'ArrowLeft')  levelIdx = (levelIdx + TOTAL_TILES - 1) % TOTAL_TILES;
+      if (code === 'ArrowRight') levelIdx = (levelIdx + 1) % TOTAL_TILES;
       if (code === 'ArrowLeft' || code === 'ArrowRight') buildChart(levelIdx);
       return;
     }
@@ -916,7 +1020,7 @@
       avoidNote.result = 'faulted';
       misses++;
       combo = 0;
-      health -= LEVELS[levelIdx].missPenalty || 14;
+      health -= curLevelDef(levelIdx).missPenalty || 14;
       flashes.push({ lane:laneIdx, t:t, kind:'miss' });
       glitch(audioCtx.currentTime + 0.005);
       return;
@@ -1022,7 +1126,7 @@
         var row = Math.floor((y - g.startY) / (TILE + TILE_GAP));
         if (col >= 0 && col < g.cols && row >= 0 && row < g.rows){
           var idx = row * g.cols + col;
-          if (idx < LEVELS.length && idx !== levelIdx){ levelIdx = idx; buildChart(levelIdx); }
+          if (idx < TOTAL_TILES && idx !== levelIdx){ levelIdx = idx; buildChart(levelIdx); }
         }
         return;
       }
@@ -1060,7 +1164,8 @@
   // заслуживает более долгой, многофазной сцены, а не такой же короткой
   // вспышки, как везде. Переопределяется полем goodLen/badLen у cutscene
   function cutsceneLen(){
-    var cs = (LEVELS[levelIdx] && LEVELS[levelIdx].cutscene) || {};
+    var lv = curLevelDef(levelIdx);
+    var cs = (lv && lv.cutscene) || {};
     var override = cutGood ? cs.goodLen : cs.badLen;
     return override || CUT_LEN;
   }
@@ -1076,9 +1181,13 @@
 
     // затухание (Последний сон): жизнь тихо угасает сама по себе, попадания
     // лишь компенсируют её — на обычных уровнях decay не задан, ничего не меняется
-    var curLevel = LEVELS[levelIdx];
+    var curLevel = curLevelDef(levelIdx);
     if (curLevel.decay) health -= curLevel.decay * (t - lastUpdateT);
     lastUpdateT = t;
+
+    // бесконечный сон дописывает ноты по мере игры — держим буфер на
+    // ENDLESS_LOOKAHEAD секунд вперёд, каждый кадр понемногу
+    if (curLevel.endless) growEndlessChart(t);
 
     for (var i=0;i<chart.length;i++){
       var n = chart[i];
@@ -1099,7 +1208,7 @@
         n.result = 'miss';
         misses++;
         combo = 0;
-        health -= LEVELS[levelIdx].missPenalty || 14;
+        health -= curLevel.missPenalty || 14;
         n.lanes.forEach(function(l){ flashes.push({ lane:l, t:t, kind:'miss' }); });
         glitch(audioCtx.currentTime + 0.005);   // нота осталась без ответа — мелодия сбивается
       }
@@ -1107,6 +1216,13 @@
     echoes.forEach(function(ec){ if (!ec.resolved && t > ec.t + ECHO_WINDOW) ec.resolved = true; }); // просто гаснет, без последствий
     flashes = flashes.filter(function(f){ return t - f.t < 0.25; });
     bonusPops = bonusPops.filter(function(b){ return t - b.t < 1.4; });
+
+    // бесконечный сон копит ноты без ограничения по времени — старые,
+    // уже отсуженные ноты вычищаются из начала chart, иначе за долгий заход
+    // массив рос бы неограниченно
+    if (curLevel.endless && chart.length > 40){
+      while (chart.length > 40 && chart[0].judged && t - chart[0].t > 3) chart.shift();
+    }
 
     if (health <= 0){ scoreShortfall = false; endGame(false); return; }
     if (t > songEnd){
@@ -1557,7 +1673,7 @@
       слегка тает (для концовок вроде "растаял"/"угас"). Ни новых надписей,
       ни новых состояний — просто другая траектория той же фигурки.
     */
-    var lv = LEVELS[levelIdx];
+    var lv = curLevelDef(levelIdx);
     var cs = lv.cutscene || {};
     var goodMotion = cs.good || 'bounce';
     var badMotion = cs.bad || 'shake';
@@ -1966,7 +2082,7 @@
       var innerColor = n.type === 'avoid' ? COL.blood : (n.type === 'restless' ? COL.lav : COL.cream);
       lanesToDraw.forEach(function(lane){
         var x = LANE_X[lane] + jitter;
-        if (LEVELS[levelIdx].noteShape === 'heart'){
+        if (curLevelDef(levelIdx).noteShape === 'heart'){
           drawHeart(x, y, IS_MOBILE ? 16 : 8, COL.violet);
           drawHeart(x, y, IS_MOBILE ? 10 : 5, innerColor);
         } else if (IS_MOBILE){
@@ -2042,8 +2158,10 @@
   */
   var TILE = 56, TILE_GAP = 12;   // уменьшены под два ряда (8 снов), чтобы под сеткой осталось место для текста
   function gridLayout(){
-    var cols = Math.min(LEVELS.length, 4);
-    var rows = Math.ceil(LEVELS.length / cols);
+    // TOTAL_TILES = LEVELS.length + 1 — восемь снов плюс девятая плитка
+    // бесконечного сна; при 4 в ряд девятая уходит в третий ряд
+    var cols = Math.min(TOTAL_TILES, 4);
+    var rows = Math.ceil(TOTAL_TILES / cols);
     var gridW = cols * TILE + (cols - 1) * TILE_GAP;
     var gridH = rows * TILE + (rows - 1) * TILE_GAP;
     var startX = Math.round((W - gridW) / 2);
@@ -2052,7 +2170,7 @@
   }
   function drawLevelGrid(t){
     var g = gridLayout();
-    for (var i = 0; i < LEVELS.length; i++){
+    for (var i = 0; i < TOTAL_TILES; i++){
       var col = i % g.cols, row = Math.floor(i / g.cols);
       var x = g.startX + col * (TILE + TILE_GAP);
       var y = g.startY + row * (TILE + TILE_GAP);
@@ -2071,7 +2189,8 @@
       px(x + TILE - bw, y + bob, bw, TILE, bc);
 
       ctx.globalAlpha = locked ? 0.35 : 1;
-      drawPixelTextCentered(String(i + 1), x + TILE/2, y + bob + TILE/2 - 13, TEXT, COL.cream);
+      var tileLabel = i === ENDLESS_IDX ? '∞' : String(i + 1);
+      drawPixelTextCentered(tileLabel, x + TILE/2, y + bob + TILE/2 - 13, TEXT, COL.cream);
       ctx.globalAlpha = 1;
 
       if (levelBest(i) > 0){                       // пройденный уровень — метка в углу
@@ -2142,7 +2261,7 @@
     if (showPlayScene) drawSleeper(gt);
     if (showPlayScene) drawHUD(gt);
     if (showPlayScene) drawBonusPops(gt);
-    if (showPlayScene && LEVELS[levelIdx].metronome) drawMetronome(gt);
+    if (showPlayScene && curLevelDef(levelIdx).metronome) drawMetronome(gt);
     // кнопка паузы видна только пока реально играем — на самой паузе там
     // уже открыто меню, тапать по углу незачем
     if (state === STATE.PLAY) drawPauseButton();
@@ -2187,8 +2306,9 @@
     }
 
     if (state === STATE.HINT){
-      var hlv = LEVELS[levelIdx];
-      centerText([(levelIdx + 1) + '. ' + hlv.name], IS_MOBILE ? 128 : 74, TITLE, COL.cream, TXW);
+      var hlv = curLevelDef(levelIdx);
+      var hintTitle = levelIdx === ENDLESS_IDX ? hlv.name : ((levelIdx + 1) + '. ' + hlv.name);
+      centerText([hintTitle], IS_MOBILE ? 128 : 74, TITLE, COL.cream, TXW);
       centerText([hlv.hint || ''], IS_MOBILE ? 238 : 140, FONT_NATIVE, COL.lav, TXW);
       if (IS_MOBILE){
         if (Math.floor(t*2) % 2 === 0) centerText(['тап — начать'], 340, TEXT, COL.cream);
@@ -2203,15 +2323,22 @@
       centerText(['Д Р Ё М А'], IS_MOBILE ? 34 : 20, TITLE, COL.cream);
       var gridBottom = drawLevelGrid(t);
       var locked = !isUnlocked(levelIdx);
-      centerText([(levelIdx + 1) + '. ' + LEVELS[levelIdx].name], gridBottom + (IS_MOBILE ? 10 : 8), TEXT, locked ? COL.lav : COL.cream, TXW);
+      var isEndlessSel = levelIdx === ENDLESS_IDX;
+      var menuLv = curLevelDef(levelIdx);
+      var nameLine = isEndlessSel ? menuLv.name : ((levelIdx + 1) + '. ' + menuLv.name);
+      centerText([nameLine], gridBottom + (IS_MOBILE ? 10 : 8), TEXT, locked ? COL.lav : COL.cream, TXW);
+      // бесконечный сон не проходится на очки — у него нет "цели", только
+      // рекорд за лучший заход, поэтому вторая строка меню у него другая
       if (IS_MOBILE){
         // имя, рекорд, цель и общий счёт вместе не помещаются в одну строку
         // на 288px холсте — та же информация, что и на десктопе, но в два ряда
         centerText([save.name + '  ·  рекорд ' + levelBest(levelIdx)], gridBottom + 44, FONT_NATIVE, COL.lav, TXW);
-        centerText(['цель ' + requiredScore() + '  ·  всего ' + save.total], gridBottom + 60, FONT_NATIVE, COL.lav, TXW);
+        centerText([isEndlessSel ? 'играй, пока хватает сил' : ('цель ' + requiredScore() + '  ·  всего ' + save.total)], gridBottom + 60, FONT_NATIVE, COL.lav, TXW);
       } else {
-        centerText([save.name + '  ·  рекорд ' + levelBest(levelIdx) + '  ·  цель ' + requiredScore() + '  ·  всего ' + save.total],
-                   gridBottom + 42, FONT_NATIVE, COL.lav, TXW);
+        var statText = isEndlessSel
+          ? (save.name + '  ·  рекорд ' + levelBest(levelIdx) + '  ·  играй, пока хватает сил')
+          : (save.name + '  ·  рекорд ' + levelBest(levelIdx) + '  ·  цель ' + requiredScore() + '  ·  всего ' + save.total);
+        centerText([statText], gridBottom + 42, FONT_NATIVE, COL.lav, TXW);
       }
       var menuActionY = gridBottom + (IS_MOBILE ? 82 : 60);
       if (locked){
@@ -2235,7 +2362,7 @@
     }
 
     if (state === STATE.OVER || state === STATE.CLEAR){
-      var lv2 = LEVELS[levelIdx];
+      var lv2 = curLevelDef(levelIdx);
       var good = state === STATE.CLEAR;
       var title = good ? lv2.endings.good : lv2.endings.bad;
       centerText([title], IS_MOBILE ? 65 : 38, TITLE, good ? COL.cream : COL.blood, TXW);
