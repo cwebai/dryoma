@@ -924,6 +924,14 @@
       state = state === STATE.MENU ? STATE.SETTINGS : STATE.MENU;
       return;
     }
+    // горячая клавиша I — сразу выбирает и запускает бесконечный режим прямо
+    // из меню, без стрелок и клика по кнопке (только десктоп: на мобильной
+    // версии нет физической клавиатуры, там играют тапом по самой кнопке)
+    if (code === 'KeyI' && !IS_MOBILE && state === STATE.MENU && isUnlocked(ENDLESS_IDX)){
+      levelIdx = ENDLESS_IDX;
+      startGame();
+      return;
+    }
     if (state === STATE.SETTINGS){
       if (code === 'ArrowLeft' || code === 'ArrowRight') toggleControlScheme();
       return;
@@ -2396,8 +2404,13 @@
       }
       // настройки — это переключатель стрелки/WASD для иконки под хит-баром;
       // на мобильной версии этой иконки нет вовсе (играют тапом), поэтому и
-      // пункт настроек там не показываем (см. handleKey/handleTap)
-      if (!IS_MOBILE) centerText(['S — настройки'], gridBottom + 82, FONT_NATIVE, COL.lav);
+      // пункт настроек там не показываем (см. handleKey/handleTap). Рядом —
+      // горячая клавиша I, сразу выбирающая и запускающая бесконечный режим
+      // (см. handleKey); показываем её только когда режим уже открыт
+      if (!IS_MOBILE){
+        var hintLine = 'S — настройки' + (isUnlocked(ENDLESS_IDX) ? '   ·   I — бесконечный режим' : '');
+        centerText([hintLine], gridBottom + 82, FONT_NATIVE, COL.lav, TXW);
+      }
     }
 
     if (state === STATE.SETTINGS){
